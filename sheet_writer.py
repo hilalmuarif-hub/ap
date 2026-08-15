@@ -188,6 +188,14 @@ class GspreadBackend:
         ws.append_row([str(v) for v in values], value_input_option="USER_ENTERED")
         return len(existing) + 1   # new row is right after all existing rows
 
+    def append_rows_batch(self, sheet_name: str, rows: list[list]) -> int:
+        """Append multiple rows in a single API call. Returns first new row number."""
+        ws = self._ws(sheet_name)
+        existing = ws.get_all_values()
+        str_rows = [[str(v) for v in row] for row in rows]
+        ws.append_rows(str_rows, value_input_option="USER_ENTERED")
+        return len(existing) + 1
+
     def update_row(self, sheet_name: str, row: int, values: list) -> None:
         self._ws(sheet_name).update(f"A{row}", [[str(v) for v in values]])
 
@@ -252,6 +260,53 @@ class SheetWriter:
 
         values = self._row_to_detection_values(cluster_id, evidence, record)
         return self._backend.append_row(self.config.detections_sheet_name, values)
+
+    def write_detections_batch(
+        self,
+        items: list[tuple[str, "ScoredEvidence", "OffenderRecord | None"]],
+    ) -> int:
+        """
+        Write multiple detections in as few API calls as possible.
+
+        Algorithm:
+          1. Read all existing cluster_ids once (1 read API call)
+          2. Split items into: new (append) and existing (update in-place)
+          3. Append all new rows in one batch API call
+          4. Update existing rows individually (unavoidable per-row calls)
+
+        This reduces API calls from O(2N) to O(N_existing + 2) for typical
+        first-run scenarios where most detections are new.
+
+        Returns:
+            Number of rows written (new inserts only).
+        """
+        if not items:
+            return 0
+
+        existing_ids = self._get_all_cluster_ids()
+        new_rows: list[list] = []
+
+        for cluster_id, evidence, record in items:
+            if cluster_id in existing_ids:
+                # Find the actual row number for in-place update
+                row = self._find_detection_row(cluster_id)
+                if row is not None:
+                    self._update_detection_in_place(row, evidence, record)
+            else:
+                new_rows.append(
+                    self._row_to_detection_values(cluster_id, evidence, record)
+                )
+
+        if new_rows:
+            if hasattr(self._backend, "append_rows_batch"):
+                self._backend.append_rows_batch(
+                    self.config.detections_sheet_name, new_rows
+                )
+            else:
+                for row in new_rows:
+                    self._backend.append_row(self.config.detections_sheet_name, row)
+
+        return len(new_rows)
 
     def _update_detection_in_place(
         self,

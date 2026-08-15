@@ -216,18 +216,18 @@ def cmd_run(
     # ---- Step 9: Write to Google Sheets (non-critical) ----------------------
     if not dry_run and writer is not None:
         try:
-            written = 0
-            for cid, evidence in scored_items:
-                if evidence.verdict == "ignore":
-                    continue
-                rec = None
-                if registry is not None:
-                    rec = registry.lookup(
-                        evidence.identity.permanent_id,
-                        evidence.identity.platform,
-                    )
-                writer.write_detection(cid, evidence, rec)
-                written += 1
+            # Batch write: 1 read + 1 batch-append instead of N reads + N appends
+            batch = [
+                (
+                    cid,
+                    evidence,
+                    registry.lookup(evidence.identity.permanent_id,
+                                    evidence.identity.platform) if registry else None,
+                )
+                for cid, evidence in scored_items
+                if evidence.verdict != "ignore"
+            ]
+            written = writer.write_detections_batch(batch)
             _step("sheets", f"wrote {written} detections")
         except Exception as exc:
             stats.sheet_write_errors += 1
