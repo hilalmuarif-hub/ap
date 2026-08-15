@@ -376,19 +376,33 @@ def _extract_view_count_near_video(html: str, video_url: str) -> int | None:
 
     window = html[idx: idx + 1000]
 
-    # Strategy A: human-readable text (e.g. "2,5 jt views", "500 penonton")
+    # Strategy A1: English pattern — "2K views", "1.2M views", "500 views"
     m = re.search(
-        r'([\d,]+(?:\.\d+)?)\s*([KkMm])?\s*'
-        r'(?:views?|penonton|ditonton)',
+        r'([\d,]+(?:\.\d+)?)\s*([KkMm])?\s*(?:views?|penonton|ditonton)',
         window,
     )
     if m:
         try:
             num = float(m.group(1).replace(",", ""))
-            suffix = m.group(2) or ""
-            if suffix in ("K", "k"):
+            suffix = (m.group(2) or "").lower()
+            if suffix == "k":
                 num *= 1_000
-            elif suffix in ("M", "m"):
+            elif suffix == "m":
+                num *= 1_000_000
+            return int(num)
+        except ValueError:
+            pass
+
+    # Strategy A2: Indonesian reel pattern — "6,8 rb Tayangan", "199 Tayangan"
+    # Comma is decimal separator in Indonesian locale (6,8 = 6.8)
+    m = re.search(r'([\d]+(?:[,.]\d+)?)\s*(rb|jt)?\s*Tayangan', window)
+    if m:
+        try:
+            num = float(m.group(1).replace(",", "."))
+            suffix = (m.group(2) or "").lower()
+            if suffix == "rb":
+                num *= 1_000
+            elif suffix == "jt":
                 num *= 1_000_000
             return int(num)
         except ValueError:
@@ -431,13 +445,17 @@ def _find_url_in_html(html: str, url: str) -> int:
     if idx != -1:
         return idx
 
-    # Phase 3: for FB watch URLs — find video ID in JSON data block.
-    # FB embeds {"video":{"id":"VIDEO_ID"},...,"title":"..."} in the page.
-    # This position is the best anchor for JSON-based title/channel extraction.
-    if parsed.path.rstrip("/") == "/watch" and parsed.query:
-        vid = parse_qs(parsed.query).get("v", [""])[0]
-        if vid and vid.isdigit():
-            m = re.search(rf'"id"\s*:\s*"{re.escape(vid)}"', html)
+    # Phase 3: find video/reel ID in JSON data block.
+    # Watch videos: "id":"VIDEO_ID" in FB's Relay JSON.
+    # Reels: "open_video_uri":"\/reel\/REEL_ID" in click_metadata_model.
+    vid = _fb_video_id_from_url(url)
+    if vid:
+        for pattern in (
+            rf'"id"\s*:\s*"{re.escape(vid)}"',           # watch videos
+            rf'\\\/reel\\\/{re.escape(vid)}',             # reels in JSON
+            rf'\\\/videos\\\/{re.escape(vid)}',           # videos in JSON
+        ):
+            m = re.search(pattern, html)
             if m:
                 return m.start()
 
@@ -445,22 +463,58 @@ def _find_url_in_html(html: str, url: str) -> int:
 
 
 def _fb_video_id_from_url(url: str) -> str | None:
-    """Extract the numeric video ID from a normalized FB watch URL."""
+    """
+    Extract the numeric video/reel ID from a normalized FB content URL.
+
+    Handles:
+      /watch?v=ID          → ID from query param
+      /reel/ID             → ID from path (FB now shows reels in search)
+      /reels/ID            → same
+      /videos/ID           → same
+      /groups/GID/videos/VID → VID
+    """
     parsed = urlparse(url)
-    if parsed.path.rstrip("/") != "/watch":
-        return None
-    vid = parse_qs(parsed.query).get("v", [None])[0]
-    return vid if vid and vid.isdigit() else None
+    path = parsed.path.rstrip("/")
+
+    # /watch?v=ID
+    if path == "/watch":
+        vid = parse_qs(parsed.query).get("v", [None])[0]
+        return vid if vid and vid.isdigit() else None
+
+    # /reel/ID, /reels/ID, /videos/ID
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 2 and parts[0] in ("reel", "reels", "videos") and parts[1].isdigit():
+        return parts[1]
+
+    # /<page>/videos/<VID>  (e.g. /bangkapos/videos/283466043640108)
+    if (len(parts) >= 3 and parts[1] in ("videos", "video", "live")
+            and parts[2].isdigit()):
+        return parts[2]
+
+    # /groups/GID/videos/VID
+    if (len(parts) >= 4 and parts[0] == "groups" and parts[1].isdigit()
+            and parts[2] in ("videos", "video", "live") and parts[3].isdigit()):
+        return parts[3]
+
+    return None
 
 
 def _extract_fb_title_from_json(html: str, video_id: str) -> str:
     """
     Extract video title from FB's embedded JSON data by video ID.
 
-    FB embeds search result data as JSON in <script> tags. The title appears
-    as "title":"..." or "save_description":"..." near the video id field.
+    Watch videos: looks for "id":"VIDEO_ID" → finds "title":"..." nearby.
+    Reels: looks for /reel/REEL_ID in click_metadata_model JSON.
     """
-    m = re.search(rf'"id"\s*:\s*"{re.escape(video_id)}"', html)
+    m = None
+    for pattern in (
+        rf'"id"\s*:\s*"{re.escape(video_id)}"',
+        rf'\\\/reel\\\/{re.escape(video_id)}',
+        rf'\\\/videos\\\/{re.escape(video_id)}',
+    ):
+        m = re.search(pattern, html)
+        if m:
+            break
     if not m:
         return ""
     window = html[m.start(): m.start() + 2000]
@@ -483,10 +537,18 @@ def _extract_fb_channel_from_json(html: str, video_id: str) -> tuple[str, str]:
     """
     Extract (channel_id, channel_name) from FB's embedded JSON near a video ID.
 
-    The owner's numeric ID is the second distinct numeric ID that appears in
-    the JSON block after the video ID. The owner name is in a "name" field.
+    Works for both watch videos ("id":"ID") and reels (/reel/ID).
+    The owner's numeric ID is the next distinct numeric ID after the video ID.
     """
-    m = re.search(rf'"id"\s*:\s*"{re.escape(video_id)}"', html)
+    m = None
+    for pattern in (
+        rf'"id"\s*:\s*"{re.escape(video_id)}"',
+        rf'\\\/reel\\\/{re.escape(video_id)}',
+        rf'\\\/videos\\\/{re.escape(video_id)}',
+    ):
+        m = re.search(pattern, html)
+        if m:
+            break
     if not m:
         return ("unknown", "")
     window = html[m.start(): m.start() + 3000]
