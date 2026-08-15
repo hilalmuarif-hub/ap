@@ -116,6 +116,15 @@ def cmd_run(
     if not raw_detections:
         _warn("detect", "zero detections - crawler may be blocked. Continuing to canary.")
 
+    # ---- Step 4b: Apply channel whitelist -----------------------------------
+    whitelist = _load_channel_whitelist(titles_path)
+    if whitelist:
+        before = len(raw_detections)
+        raw_detections = [d for d in raw_detections if d.channel_id not in whitelist]
+        removed = before - len(raw_detections)
+        if removed:
+            _step("whitelist", f"excluded {removed} detections from {removed} whitelisted channels")
+
     # ---- Step 5: Resolve identities -----------------------------------------
     from identity import IdentityResolver, OffenderIdentity
 
@@ -333,6 +342,26 @@ def _abort(msg: str) -> None:
 
 def _utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _load_channel_whitelist(titles_path: str) -> set[str]:
+    """
+    Load channel IDs to exclude from detection results.
+
+    Reads channel_whitelist.txt from the same directory as titles_path.
+    Lines starting with # are comments. Empty lines are ignored.
+    Returns a set of channel_id strings (numeric IDs or usernames).
+    """
+    import pathlib
+    whitelist_path = pathlib.Path(titles_path).parent / "channel_whitelist.txt"
+    if not whitelist_path.exists():
+        return set()
+    ids: set[str] = set()
+    for line in whitelist_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            ids.add(line)
+    return ids
 
 
 def _fb_profile_url(channel_id: str) -> str:

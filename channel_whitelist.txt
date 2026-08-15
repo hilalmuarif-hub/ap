@@ -1,0 +1,13 @@
+# channel_whitelist.txt — Channel IDs yang dikecualikan dari deteksi piracy.
+#
+# Isi dengan channel milik Vidio sendiri atau mitra resmi yang tidak perlu di-flag.
+# Satu entry per baris. Baris dengan # diabaikan.
+#
+# Format: channel_id (numeric permanent ID atau username)
+# Contoh:
+#   100068769016154     (dari profile.php?id=...)
+#   vidiodotcom         (username Facebook)
+
+# --- Akun Resmi Vidio ---
+100068769016154
+vidiodotcom
