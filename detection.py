@@ -63,6 +63,14 @@ class PageDriver(Protocol):
         """Scroll the page down by `pixels` to trigger lazy-loaded content."""
         ...
 
+    def evaluate(self, expression: str) -> object:
+        """Evaluate JavaScript expression in the page context."""
+        ...
+
+    def wait_for_timeout(self, millis: int) -> None:
+        """Wait for the given number of milliseconds."""
+        ...
+
     def close(self) -> None:
         """Release the page and its resources."""
         ...
@@ -113,6 +121,17 @@ class PlaywrightPageDriver:
             self._page.evaluate(f"window.scrollBy(0, {pixels})")
         except Exception:
             pass   # scroll failure is non-critical, continue with current HTML
+
+    def evaluate(self, expression: str) -> object:
+        """Run JavaScript in the page context. Returns the result."""
+        try:
+            return self._page.evaluate(expression)
+        except Exception:
+            return None
+
+    def wait_for_timeout(self, millis: int) -> None:
+        """Wait for the given number of milliseconds."""
+        self._page.wait_for_timeout(millis)
 
     def close(self) -> None:
         self._page.close()
@@ -850,62 +869,60 @@ class BilibiliCrawler(BasePlatformCrawler):
         self._results_wait_secs = results_wait_secs
         self._min_delay_secs = min_delay_secs
         self._last_search_at: float = 0.0
-        self._homepage_loaded: bool = False   # load once, reuse
+        self._page: "PageDriver | None" = None   # persistent page reused across queries
 
     def search(self, query: str, max_results: int = 50) -> list[RawDetection]:
         """
         Search Bilibili TV for user-uploaded infringing content.
 
-        Navigates to homepage on first call, then types query and waits for
-        client-side routing to load search results. Reuses the same browser
-        page between queries for efficiency.
+        Uses a persistent browser page across all queries so the homepage is
+        loaded only ONCE per BilibiliCrawler instance. Each subsequent query
+        reuses the same page (types in search box, waits, extracts results).
+        This avoids 50 homepage navigations × 5-60s each.
         """
         self._enforce_rate_limit()
-        page = self._get_factory().new_page()
         try:
-            # Go to homepage if not already there (first query)
-            if not self._homepage_loaded:
-                page.goto(self._HOMEPAGE, wait_until="domcontentloaded", timeout=60_000)
-                time.sleep(2)
-                # Dismiss cookie banner if present
-                try:
-                    page.evaluate(
-                        "document.querySelector('[class*=\"cookie\"] button') && "
-                        "document.querySelector('[class*=\"cookie\"] button').click()"
-                    )
-                except Exception:
-                    pass
-                self._homepage_loaded = True
-
-            # Find search input and type query
+            page = self._get_or_create_page()
+            query_js = query.replace("'", "\\'")
             page.evaluate(
                 f"""
                 (function() {{
                     var inputs = document.querySelectorAll('input[type="text"]');
                     for (var i = 0; i < inputs.length; i++) {{
                         inputs[i].focus();
-                        inputs[i].value = {repr(query)};
+                        inputs[i].value = '{query_js}';
                         inputs[i].dispatchEvent(new Event('input', {{bubbles: true}}));
-                        inputs[i].dispatchEvent(new KeyboardEvent('keydown', {{key: 'Enter', bubbles: true}}));
+                        inputs[i].dispatchEvent(new KeyboardEvent('keydown',
+                            {{key: 'Enter', keyCode: 13, bubbles: true}}));
                         return true;
                     }}
                 }})();
                 """
             )
-            time.sleep(self._results_wait_secs)
-
+            page.wait_for_timeout(int(self._results_wait_secs * 1000))
             results = self._parse_results_from_dom(page, query)
         except Exception as exc:
             print(f"[BilibiliCrawler] error during search({query!r}): {exc}", file=sys.stderr)
             results = []
         finally:
-            page.close()
             self._last_search_at = time.monotonic()
-            self._homepage_loaded = False   # next query needs fresh page
 
         return results[:max_results]
 
-    def _parse_results_from_dom(self, page, query: str) -> list[RawDetection]:
+    def _get_or_create_page(self) -> "PageDriver":
+        """Return the persistent page, creating and loading homepage if needed."""
+        if self._page is None:
+            self._page = self._get_factory().new_page()
+            self._page.goto(self._HOMEPAGE)
+            self._page.wait_for_timeout(3000)
+            # Dismiss cookie banner if present
+            self._page.evaluate(
+                "document.querySelector('[class*=\"cookie\"] button') && "
+                "document.querySelector('[class*=\"cookie\"] button').click()"
+            )
+        return self._page
+
+    def _parse_results_from_dom(self, page: "PageDriver", query: str) -> list[RawDetection]:
         """Extract video cards from Bilibili TV search results via DOM query."""
         now = _utc_now()
         try:
@@ -919,7 +936,7 @@ class BilibiliCrawler(BasePlatformCrawler):
                         // Only user-uploaded videos (/video/ID) — skip official series (/play/ID)
                         if (!href.includes('/video/') || !href.includes('bilibili.tv')) continue;
                         // Extract numeric video ID (12+ digits)
-                        const m = href.match(/[/]video[/](\d{10,})/);
+                        const m = href.match(/[/]video[/]([0-9]{10,})/);
                         if (!m) continue;
                         const videoId = m[1];
                         if (seen.has(videoId)) continue;
@@ -928,20 +945,37 @@ class BilibiliCrawler(BasePlatformCrawler):
                         // Canonical URL
                         const url = 'https://www.bilibili.tv/video/' + videoId;
 
-                        // Title: look in card container
-                        const card = a.closest('[class*="card"], [class*="item"], [class*="video"], li') || a;
-                        const titleEl = card.querySelector('[class*="title"], h3, h4') || a;
-                        const title = (titleEl.textContent || a.title || '').trim().substring(0, 200);
+                        // Card container — walk up to find a meaningful parent
+                        const card = a.closest('li, article, [class*="card"], [class*="item"]') || a.parentElement || a;
 
-                        // Channel: look for uploader link
-                        const chanEl = card.querySelector('[class*="author"], [class*="user"], [class*="up-name"]');
-                        const chanName = chanEl ? chanEl.textContent.trim() : '';
+                        // Title: try multiple strategies
+                        let title = '';
+                        // 1. aria-label or title attribute on the link itself
+                        title = a.getAttribute('aria-label') || a.title || '';
+                        if (!title) {
+                            // 2. Find the longest text node in the card (likely the title)
+                            const textNodes = Array.from(card.querySelectorAll('p, span, h1, h2, h3, h4, div'))
+                                .map(el => el.childNodes)
+                                .reduce((acc, nl) => acc.concat(Array.from(nl)), [])
+                                .filter(n => n.nodeType === 3)  // text nodes only
+                                .map(n => n.textContent.trim())
+                                .filter(t => t.length > 3 && t.length < 200);
+                            if (textNodes.length > 0) {
+                                title = textNodes.reduce((a, b) => a.length > b.length ? a : b, '');
+                            }
+                        }
+                        if (!title) {
+                            // 3. All text in card, trimmed
+                            title = card.textContent.trim().substring(0, 100);
+                        }
+                        title = title.substring(0, 200);
 
-                        // Channel URL / ID
-                        const chanLink = card.querySelector('a[href*="/space/"], a[href*="/user/"]');
+                        // Channel: any link in card pointing to a user space
+                        const chanLink = card.querySelector('a[href*="/space/"], a[href*="/@"]');
                         const chanUrl = chanLink ? chanLink.href : '';
-                        const chanIdM = chanUrl.match(/\/(?:space|user)\/(\d+)/);
-                        const chanId = chanIdM ? chanIdM[1] : (chanName || 'unknown');
+                        const chanIdM = chanUrl.match(/[/](?:space|user|@)[/]([^/?]+)/);
+                        const chanId = chanIdM ? chanIdM[1] : 'unknown';
+                        const chanName = chanLink ? chanLink.textContent.trim() : '';
 
                         // View count
                         const viewEl = card.querySelector('[class*="view"], [class*="play-count"], [class*="count"]');
@@ -997,6 +1031,12 @@ class BilibiliCrawler(BasePlatformCrawler):
         return []
 
     def close(self) -> None:
+        if self._page is not None:
+            try:
+                self._page.close()
+            except Exception:
+                pass
+            self._page = None
         if self._browser_factory is not None:
             self._browser_factory.close()
             self._browser_factory = None
