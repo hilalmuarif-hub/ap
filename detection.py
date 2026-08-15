@@ -94,6 +94,9 @@ class PlaywrightPageDriver:
 
     def __init__(self, page) -> None:   # page: playwright.sync_api.Page
         self._page = page
+        # Bound all page operations to 15s. Without this, evaluate() and
+        # content() can hang indefinitely if the browser connection breaks.
+        self._page.set_default_timeout(15_000)
 
     def goto(self, url: str) -> None:
         # "domcontentloaded" instead of "networkidle" — Facebook never reaches
@@ -105,10 +108,8 @@ class PlaywrightPageDriver:
         return self._page.content()
 
     def scroll_down(self, pixels: int = 1000) -> None:
-        # 5s timeout — evaluate() can hang on broken pages without a timeout
         try:
-            self._page.evaluate(f"window.scrollBy(0, {pixels})",
-                                timeout=5000)
+            self._page.evaluate(f"window.scrollBy(0, {pixels})")
         except Exception:
             pass   # scroll failure is non-critical, continue with current HTML
 
