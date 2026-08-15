@@ -562,7 +562,7 @@ class FacebookCrawler(BasePlatformCrawler):
         headless: bool = True,
         cookies_path: str | None = None,
         browser_factory: BrowserFactory | None = None,
-        scroll_count: int = 1,
+        scroll_count: int = 3,
         scroll_pause_secs: float = 1.0,
         min_delay_secs: float = 2.0,
     ) -> None:
