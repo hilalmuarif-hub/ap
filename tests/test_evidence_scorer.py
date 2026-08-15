@@ -20,6 +20,7 @@ def make_detection(
     title: str = "Liga Champions Vidio",
     snapshot_html: str = "<html>test</html>",
     extra: dict | None = None,
+    query_used: str = "liga champions vidio",
 ) -> RawDetection:
     return RawDetection(
         platform="facebook",
@@ -29,7 +30,7 @@ def make_detection(
         channel_name="Test Pirate",
         snapshot_html=snapshot_html,
         detected_at="2025-01-15T08:00:00Z",
-        query_used="liga champions vidio",
+        query_used=query_used,
         extra=extra or {},
     )
 
@@ -127,8 +128,14 @@ class TestTitleKeywordMatch:
         det = make_detection(title="Liga Champions 2025")
         assert scorer._score_title_keyword_match(det) == 0
 
-    def test_empty_title_returns_zero(self):
-        det = make_detection(title="   ")
+    def test_empty_title_uses_query_used_fallback(self):
+        # Empty title → scorer falls back to query_used.
+        # query_used="liga champions vidio" matches catalog "Liga Champions 2025" → >0
+        det = make_detection(title="   ", query_used="liga champions vidio")
+        assert self.scorer._score_title_keyword_match(det) > 0
+
+    def test_empty_title_and_unrelated_query_returns_zero(self):
+        det = make_detection(title="   ", query_used="resep masak ayam")
         assert self.scorer._score_title_keyword_match(det) == 0
 
     def test_unrelated_title_returns_zero(self):

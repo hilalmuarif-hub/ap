@@ -144,11 +144,19 @@ class EvidenceScorer:
           sim ≥ 0.60 → 5  (partial match — warrants manual review)
           sim <  0.60 → 0
         """
-        if not self._content_catalog or not detection.title.strip():
+        if not self._content_catalog:
+            return 0
+
+        # Use title if available; fall back to query_used (e.g. for FB reels
+        # that don't embed a title in search result JSON).
+        # query_used is always normalised (e.g. "penerbangan terakhir vidio"),
+        # so a near-exact catalog match signals the reel was found by that query.
+        text = detection.title.strip() or detection.query_used.strip()
+        if not text:
             return 0
 
         best_sim = max(
-            similarity(detection.title, catalog_title)
+            similarity(text, catalog_title)
             for catalog_title in self._content_catalog
         )
 
