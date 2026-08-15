@@ -816,9 +816,208 @@ class FacebookCrawler(BasePlatformCrawler):
 # Crawler registry and orchestrator
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# BilibiliCrawler
+# ---------------------------------------------------------------------------
+
+class BilibiliCrawler(BasePlatformCrawler):
+    """
+    Crawler for Bilibili TV (bilibili.tv/id) — user-uploaded piracy videos.
+
+    Bilibili TV is a heavy React SPA. Standard HTML scraping doesn't work
+    because search results are loaded client-side via API after the page mounts.
+
+    Strategy:
+      1. Navigate to Bilibili TV homepage
+      2. Type the query into the search box
+      3. Press Enter → wait 15s for results to load
+      4. Query DOM directly for video cards (JavaScript evaluation)
+      5. Filter to /video/{id} URLs only — /play/{id} = official series, skip
+
+    No cookies needed — Bilibili TV search is publicly accessible.
+    """
+
+    platform_name = "bilibili"
+    _HOMEPAGE = "https://www.bilibili.tv/id"
+
+    def __init__(
+        self,
+        browser_factory: BrowserFactory | None = None,
+        results_wait_secs: float = 15.0,
+        min_delay_secs: float = 3.0,
+    ) -> None:
+        self._browser_factory = browser_factory
+        self._results_wait_secs = results_wait_secs
+        self._min_delay_secs = min_delay_secs
+        self._last_search_at: float = 0.0
+        self._homepage_loaded: bool = False   # load once, reuse
+
+    def search(self, query: str, max_results: int = 50) -> list[RawDetection]:
+        """
+        Search Bilibili TV for user-uploaded infringing content.
+
+        Navigates to homepage on first call, then types query and waits for
+        client-side routing to load search results. Reuses the same browser
+        page between queries for efficiency.
+        """
+        self._enforce_rate_limit()
+        page = self._get_factory().new_page()
+        try:
+            # Go to homepage if not already there (first query)
+            if not self._homepage_loaded:
+                page.goto(self._HOMEPAGE, wait_until="domcontentloaded", timeout=60_000)
+                time.sleep(2)
+                # Dismiss cookie banner if present
+                try:
+                    page.evaluate(
+                        "document.querySelector('[class*=\"cookie\"] button') && "
+                        "document.querySelector('[class*=\"cookie\"] button').click()"
+                    )
+                except Exception:
+                    pass
+                self._homepage_loaded = True
+
+            # Find search input and type query
+            page.evaluate(
+                f"""
+                (function() {{
+                    var inputs = document.querySelectorAll('input[type="text"]');
+                    for (var i = 0; i < inputs.length; i++) {{
+                        inputs[i].focus();
+                        inputs[i].value = {repr(query)};
+                        inputs[i].dispatchEvent(new Event('input', {{bubbles: true}}));
+                        inputs[i].dispatchEvent(new KeyboardEvent('keydown', {{key: 'Enter', bubbles: true}}));
+                        return true;
+                    }}
+                }})();
+                """
+            )
+            time.sleep(self._results_wait_secs)
+
+            results = self._parse_results_from_dom(page, query)
+        except Exception as exc:
+            print(f"[BilibiliCrawler] error during search({query!r}): {exc}", file=sys.stderr)
+            results = []
+        finally:
+            page.close()
+            self._last_search_at = time.monotonic()
+            self._homepage_loaded = False   # next query needs fresh page
+
+        return results[:max_results]
+
+    def _parse_results_from_dom(self, page, query: str) -> list[RawDetection]:
+        """Extract video cards from Bilibili TV search results via DOM query."""
+        now = _utc_now()
+        try:
+            items = page.evaluate("""
+                () => {
+                    const seen = new Set();
+                    const results = [];
+                    const links = Array.from(document.querySelectorAll('a[href]'));
+                    for (const a of links) {
+                        const href = a.href || '';
+                        // Only user-uploaded videos (/video/ID) — skip official series (/play/ID)
+                        if (!href.includes('/video/') || !href.includes('bilibili.tv')) continue;
+                        // Extract numeric video ID (12+ digits)
+                        const m = href.match(/[/]video[/](\d{10,})/);
+                        if (!m) continue;
+                        const videoId = m[1];
+                        if (seen.has(videoId)) continue;
+                        seen.add(videoId);
+
+                        // Canonical URL
+                        const url = 'https://www.bilibili.tv/video/' + videoId;
+
+                        // Title: look in card container
+                        const card = a.closest('[class*="card"], [class*="item"], [class*="video"], li') || a;
+                        const titleEl = card.querySelector('[class*="title"], h3, h4') || a;
+                        const title = (titleEl.textContent || a.title || '').trim().substring(0, 200);
+
+                        // Channel: look for uploader link
+                        const chanEl = card.querySelector('[class*="author"], [class*="user"], [class*="up-name"]');
+                        const chanName = chanEl ? chanEl.textContent.trim() : '';
+
+                        // Channel URL / ID
+                        const chanLink = card.querySelector('a[href*="/space/"], a[href*="/user/"]');
+                        const chanUrl = chanLink ? chanLink.href : '';
+                        const chanIdM = chanUrl.match(/\/(?:space|user)\/(\d+)/);
+                        const chanId = chanIdM ? chanIdM[1] : (chanName || 'unknown');
+
+                        // View count
+                        const viewEl = card.querySelector('[class*="view"], [class*="play-count"], [class*="count"]');
+                        const views = viewEl ? viewEl.textContent.trim() : '';
+
+                        results.push({url, videoId, title, chanId, chanName, views});
+                    }
+                    return results;
+                }
+            """)
+        except Exception as exc:
+            print(f"[BilibiliCrawler] DOM query failed: {exc}", file=sys.stderr)
+            return []
+
+        detections: list[RawDetection] = []
+        for item in (items or []):
+            extra: dict = {}
+            # Parse view count (e.g. "12.5K Putar", "1.2 rb")
+            view_str = item.get("views", "")
+            view_m = re.search(r'([\d,.]+)\s*(K|M|rb|jt)?', view_str)
+            if view_m:
+                try:
+                    num = float(view_m.group(1).replace(",", "."))
+                    suf = (view_m.group(2) or "").lower()
+                    if suf == "k":  num *= 1_000
+                    elif suf == "m": num *= 1_000_000
+                    elif suf == "rb": num *= 1_000
+                    elif suf == "jt": num *= 1_000_000
+                    extra["view_count"] = int(num)
+                except Exception:
+                    pass
+
+            detections.append(RawDetection(
+                platform=self.platform_name,
+                url=item["url"],
+                title=item.get("title", ""),
+                channel_id=item.get("chanId", "unknown"),
+                channel_name=item.get("chanName", ""),
+                snapshot_html="",
+                detected_at=now,
+                query_used=query,
+                extra=extra,
+            ))
+
+        return detections
+
+    def _build_search_url(self, query: str) -> str:
+        from urllib.parse import quote_plus
+        return f"{self._HOMEPAGE}/search?keyword={quote_plus(query)}&type=VIDEO"
+
+    def _parse_results(self, raw_html: str, query: str) -> list[RawDetection]:
+        # Not used — Bilibili uses DOM-based extraction
+        return []
+
+    def close(self) -> None:
+        if self._browser_factory is not None:
+            self._browser_factory.close()
+            self._browser_factory = None
+
+    def _get_factory(self) -> BrowserFactory:
+        if self._browser_factory is None:
+            factory = PlaywrightBrowserFactory(headless=True)
+            factory.start()
+            self._browser_factory = factory
+        return self._browser_factory
+
+    def _enforce_rate_limit(self) -> None:
+        elapsed = time.monotonic() - self._last_search_at
+        if elapsed < self._min_delay_secs:
+            time.sleep(self._min_delay_secs - elapsed)
+
+
 # Maps platform_name → crawler class. Add entries here to support new platforms.
 _CRAWLER_REGISTRY: dict[str, type[BasePlatformCrawler]] = {
     "facebook": FacebookCrawler,
+    "bilibili": BilibiliCrawler,
 }
 
 
@@ -885,6 +1084,8 @@ def _build_crawlers(
                 headless=os.environ.get("FB_HEADLESS", "true").lower() != "false",
                 cookies_path=os.environ.get("FB_COOKIE_FILE"),
             ))
+        elif slug == "bilibili":
+            crawlers.append(BilibiliCrawler())
         else:
             crawlers.append(cls())   # type: ignore[abstract]
     return crawlers
