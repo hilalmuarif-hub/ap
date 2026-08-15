@@ -10,38 +10,4 @@
 #   - Short, distinctive titles generate better search queries than long ones
 #   - Avoid titles that are too generic (e.g. "Film Indonesia" alone)
 
-# --- Olahraga (Sports) ---
-Liga Champions UEFA
-Liga 1 BRI
-Copa del Rey
-Liga Europa UEFA
-Piala FA
-Serie A Italia
-Bundesliga Jerman
-Ligue 1 Prancis
-La Liga Spanyol
-Premier League Inggris
-
-# --- Drama & Sinetron ---
-Sinetron Vidio Original
-Layangan Putus
-Cinta Setelah Cinta
-Buku Harian Seorang Istri
-Suara Hati Istri
-
-# --- Film Original Vidio ---
 Penerbangan Terakhir
-Gundala
-Sri Asih
-Satria Dewa
-
-# --- Reality & Variety Show ---
-The Voice Indonesia
-Indonesian Idol
-MasterChef Indonesia
-X Factor Indonesia
-
-# --- Anime & International ---
-One Piece
-Naruto Shippuden
-Attack on Titan
