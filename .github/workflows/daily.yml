@@ -115,7 +115,7 @@ jobs:
           GCHAT_WEBHOOK_URL: ${{ secrets.GCHAT_WEBHOOK_URL }}
 
           # --- Runtime config ---
-          ENABLED_PLATFORMS: ${{ github.event.inputs.platform || 'facebook' }}
+          ENABLED_PLATFORMS: ${{ github.event.inputs.platform || 'facebook,bilibili' }}
 
           # CI=true tells daily.sh to wipe credential files after the run
           CI: 'true'
