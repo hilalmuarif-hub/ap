@@ -177,30 +177,45 @@ class GspreadBackend:
         return self._spreadsheet.worksheet(sheet_name)
 
     def get_col_values(self, sheet_name: str, col: int) -> list[str]:
-        return self._ws(sheet_name).col_values(col)
+        return self._retry(self._ws(sheet_name).col_values, col)
 
     def get_all_rows(self, sheet_name: str) -> list[list[str]]:
-        return self._ws(sheet_name).get_all_values()
+        return self._retry(self._ws(sheet_name).get_all_values)
 
     def append_row(self, sheet_name: str, values: list) -> int:
         ws = self._ws(sheet_name)
-        existing = ws.get_all_values()
-        ws.append_row([str(v) for v in values], value_input_option="USER_ENTERED")
-        return len(existing) + 1   # new row is right after all existing rows
-
-    def append_rows_batch(self, sheet_name: str, rows: list[list]) -> int:
-        """Append multiple rows in a single API call. Returns first new row number."""
-        ws = self._ws(sheet_name)
-        existing = ws.get_all_values()
-        str_rows = [[str(v) for v in row] for row in rows]
-        ws.append_rows(str_rows, value_input_option="USER_ENTERED")
+        existing = self._retry(ws.get_all_values)
+        self._retry(ws.append_row, [str(v) for v in values],
+                    value_input_option="USER_ENTERED")
         return len(existing) + 1
 
+    def append_rows_batch(self, sheet_name: str, rows: list[list]) -> None:
+        """Append multiple rows in a single API call (no row-count read needed)."""
+        ws = self._ws(sheet_name)
+        str_rows = [[str(v) for v in row] for row in rows]
+        self._retry(ws.append_rows, str_rows, value_input_option="USER_ENTERED")
+
+    @staticmethod
+    def _retry(fn, *args, **kwargs):
+        """Call fn with args, retrying up to 5x on 429 with exponential backoff."""
+        import time
+        delay = 5
+        for attempt in range(5):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:
+                if "429" in str(exc) and attempt < 4:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 60)
+                else:
+                    raise
+
     def update_row(self, sheet_name: str, row: int, values: list) -> None:
-        self._ws(sheet_name).update(f"A{row}", [[str(v) for v in values]])
+        self._retry(self._ws(sheet_name).update,
+                    f"A{row}", [[str(v) for v in values]])
 
     def update_cell(self, sheet_name: str, row: int, col: int, value: str) -> None:
-        self._ws(sheet_name).update_cell(row, col, str(value))
+        self._retry(self._ws(sheet_name).update_cell, row, col, str(value))
 
 
 # ---------------------------------------------------------------------------
