@@ -98,12 +98,12 @@ run_noncritical() {
 # ---------------------------------------------------------------------------
 
 setup_env() {
+    # Create directories FIRST — log() writes to LOG_FILE which needs LOG_DIR to exist
+    mkdir -p "${LOG_DIR}" "${STATS_DIR}"
+
     log "========================================"
     log "  AP Army Pipeline — ${RUN_ID}"
     log "========================================"
-
-    # Create required directories
-    mkdir -p "${LOG_DIR}" "${STATS_DIR}"
 
     # Source .env file if present (local development)
     if [[ -f "${SCRIPT_DIR}/.env" ]]; then
