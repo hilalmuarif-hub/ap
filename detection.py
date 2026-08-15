@@ -94,9 +94,10 @@ class PlaywrightPageDriver:
 
     def __init__(self, page) -> None:   # page: playwright.sync_api.Page
         self._page = page
-        # Bound all page operations to 15s. Without this, evaluate() and
+        # Bound all page operations to 5s. Without this, evaluate() and
         # content() can hang indefinitely if the browser connection breaks.
-        self._page.set_default_timeout(15_000)
+        # Keep it short: these ops should be instant; 5s is generous.
+        self._page.set_default_timeout(5_000)
 
     def goto(self, url: str) -> None:
         # "domcontentloaded" instead of "networkidle" — Facebook never reaches
