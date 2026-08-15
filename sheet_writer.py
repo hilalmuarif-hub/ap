@@ -197,18 +197,27 @@ class GspreadBackend:
 
     @staticmethod
     def _retry(fn, *args, **kwargs):
-        """Call fn with args, retrying up to 5x on 429 with exponential backoff."""
+        """
+        Call fn with args, retrying up to 3x on 429 quota errors.
+
+        Initial delay is 65s — just over 1 minute — to reliably clear the
+        Sheets API 'Read requests per minute per user' quota window.
+        """
         import time
-        delay = 5
-        for attempt in range(5):
+        delay = 65   # must exceed the 60s quota window
+        last_exc = None
+        for attempt in range(3):
             try:
                 return fn(*args, **kwargs)
             except Exception as exc:
-                if "429" in str(exc) and attempt < 4:
+                last_exc = exc
+                exc_str = str(exc)
+                if ("429" in exc_str or "quota" in exc_str.lower()) and attempt < 2:
                     time.sleep(delay)
-                    delay = min(delay * 2, 60)
+                    delay = min(delay * 2, 120)
                 else:
                     raise
+        raise last_exc   # all retries exhausted
 
     def update_row(self, sheet_name: str, row: int, values: list) -> None:
         self._retry(self._ws(sheet_name).update,
