@@ -105,7 +105,12 @@ class PlaywrightPageDriver:
         return self._page.content()
 
     def scroll_down(self, pixels: int = 1000) -> None:
-        self._page.evaluate(f"window.scrollBy(0, {pixels})")
+        # 5s timeout — evaluate() can hang on broken pages without a timeout
+        try:
+            self._page.evaluate(f"window.scrollBy(0, {pixels})",
+                                timeout=5000)
+        except Exception:
+            pass   # scroll failure is non-critical, continue with current HTML
 
     def close(self) -> None:
         self._page.close()
@@ -556,8 +561,8 @@ class FacebookCrawler(BasePlatformCrawler):
         headless: bool = True,
         cookies_path: str | None = None,
         browser_factory: BrowserFactory | None = None,
-        scroll_count: int = 3,
-        scroll_pause_secs: float = 2.5,
+        scroll_count: int = 1,
+        scroll_pause_secs: float = 1.0,
         min_delay_secs: float = 2.0,
     ) -> None:
         self.headless = headless
