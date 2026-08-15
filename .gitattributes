@@ -1,0 +1,10 @@
+# Ensure shell scripts always use LF (required for Linux/GitHub Actions)
+*.sh    text eol=lf
+
+# Python and other text files — auto line endings
+*.py    text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.env*  text eol=lf

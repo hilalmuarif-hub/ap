@@ -1,0 +1,34 @@
+# Credentials — NEVER commit these
+.env
+service_account.json
+oauth_client.json
+authorized_user.json
+fb_cookies.json
+*.json.bak
+
+# Cookie setup helper (run once, then delete)
+save_fb_cookies.py
+
+# Claude Code internal files
+.claude/
+
+# Pipeline runtime output
+logs/
+stats/
+stats_*.json
+__pycache__/
+*.pyc
+*.pyo
+
+# Python venv
+.venv/
+venv/
+env/
+
+# Pytest
+.pytest_cache/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
