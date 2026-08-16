@@ -5,8 +5,8 @@ name: AP Army Daily Pipeline
 # -----------------------------------------------------------------------
 on:
   schedule:
-    # 02:00 UTC = 09:00 WIB (Jakarta)
-    - cron: '0 2 * * *'
+    # 03:00 UTC = 10:00 WIB (Jakarta)
+    - cron: '0 3 * * *'
 
   # Manual trigger with optional overrides (useful for debugging)
   workflow_dispatch:
