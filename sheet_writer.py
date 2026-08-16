@@ -307,15 +307,15 @@ class SheetWriter:
         if not items:
             return 0
 
-        existing_ids = self._get_all_cluster_ids()
+        # Build cluster_id → row_number mapping in ONE read call.
+        # Previously _find_detection_row() was called per existing detection
+        # (N additional reads), blowing past the 60 reads/min quota.
+        id_to_row = self._get_cluster_id_to_row_map()
         new_rows: list[list] = []
 
         for cluster_id, evidence, record in items:
-            if cluster_id in existing_ids:
-                # Find the actual row number for in-place update
-                row = self._find_detection_row(cluster_id)
-                if row is not None:
-                    self._update_detection_in_place(row, evidence, record)
+            if cluster_id in id_to_row:
+                self._update_detection_in_place(id_to_row[cluster_id], evidence, record)
             else:
                 new_rows.append(
                     self._row_to_detection_values(cluster_id, evidence, record)
@@ -593,13 +593,28 @@ class SheetWriter:
         )
 
     def _get_all_cluster_ids(self) -> set[str]:
-        """
-        Fetch the set of all existing cluster_ids from the Detections sheet.
+        """Fetch set of existing cluster_ids (1 read call). Header skipped."""
+        col_a = self._backend.get_col_values(
+            self.config.detections_sheet_name,
+            col=DETECTIONS_COLUMNS.index("cluster_id") + 1,
+        )
+        return set(col_a[1:])
 
-        Row 1 (header) is skipped. Used for batch-level pre-check.
+    def _get_cluster_id_to_row_map(self) -> dict[str, int]:
+        """
+        Fetch mapping {cluster_id: 1-based-row-number} in ONE read API call.
+
+        Eliminates the N additional _find_detection_row() calls that
+        write_detections_batch() previously made for existing detections,
+        reducing API reads from O(N_existing + 1) to O(1).
         """
         col_a = self._backend.get_col_values(
             self.config.detections_sheet_name,
             col=DETECTIONS_COLUMNS.index("cluster_id") + 1,
         )
-        return set(col_a[1:])   # skip header at index 0
+        # col_a[0] = header, col_a[k] = data at Sheets row k+1
+        return {
+            cid: idx + 1
+            for idx, cid in enumerate(col_a)
+            if idx > 0 and cid   # skip header and empty cells
+        }
