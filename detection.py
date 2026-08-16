@@ -974,7 +974,9 @@ class BilibiliCrawler(BasePlatformCrawler):
                         const chanLink = card.querySelector('a[href*="/space/"], a[href*="/@"]');
                         const chanUrl = chanLink ? chanLink.href : '';
                         const chanIdM = chanUrl.match(/[/](?:space|user|@)[/]([^/?]+)/);
-                        const chanId = chanIdM ? chanIdM[1] : 'unknown';
+                        // Fallback: use videoId as channel_id so each video is unique for dedup.
+                        // Real channel ID requires fetching the video page — future improvement.
+                        const chanId = chanIdM ? chanIdM[1] : ('bilibili_' + videoId);
                         const chanName = chanLink ? chanLink.textContent.trim() : '';
 
                         // View count
