@@ -37,7 +37,7 @@ jobs:
   pipeline:
     name: Daily detection run
     runs-on: ubuntu-latest
-    timeout-minutes: 90       # hard ceiling — hung Playwright shouldn't block forever
+    timeout-minutes: 120      # FB ~20 min + Bilibili ~60 min on Linux CI + buffer
 
     # Permissions: read-only for code, no extra permissions needed
     permissions:
