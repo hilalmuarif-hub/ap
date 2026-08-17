@@ -81,6 +81,7 @@ RUNLOG_COLUMNS: list[str] = [
 # Status and notes are excluded — they are ops-owned and must not be overwritten.
 _DETECTION_UPDATE_COLS: frozenset[str] = frozenset({
     "score", "verdict", "last_detected", "violation_count", "tier",
+    "display_name", "content_title",   # backfill empty values from earlier runs
 })
 
 
