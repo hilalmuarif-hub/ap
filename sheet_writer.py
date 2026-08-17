@@ -177,13 +177,16 @@ class GspreadBackend:
         return self._spreadsheet.worksheet(sheet_name)
 
     def get_col_values(self, sheet_name: str, col: int) -> list[str]:
+        print(f"[SA_READ] get_col_values({sheet_name!r}, col={col})", flush=True)
         return self._retry(self._ws(sheet_name).col_values, col)
 
     def get_all_rows(self, sheet_name: str) -> list[list[str]]:
+        print(f"[SA_READ] get_all_rows({sheet_name!r})", flush=True)
         return self._retry(self._ws(sheet_name).get_all_values)
 
     def append_row(self, sheet_name: str, values: list) -> int:
         ws = self._ws(sheet_name)
+        print(f"[SA_READ] append_row pre-read({sheet_name!r})", flush=True)
         existing = self._retry(ws.get_all_values)
         self._retry(ws.append_row, [str(v) for v in values],
                     value_input_option="USER_ENTERED")
@@ -193,6 +196,7 @@ class GspreadBackend:
         """Append multiple rows in a single API call (no row-count read needed)."""
         ws = self._ws(sheet_name)
         str_rows = [[str(v) for v in row] for row in rows]
+        print(f"[SA_WRITE] append_rows_batch({sheet_name!r}, {len(rows)} rows)", flush=True)
         self._retry(ws.append_rows, str_rows, value_input_option="USER_ENTERED")
 
     @staticmethod
