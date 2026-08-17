@@ -945,45 +945,82 @@ class BilibiliCrawler(BasePlatformCrawler):
                         // Canonical URL
                         const url = 'https://www.bilibili.tv/video/' + videoId;
 
-                        // Card container — walk up to find a meaningful parent
-                        const card = a.closest('li, article, [class*="card"], [class*="item"]') || a.parentElement || a;
+                        // Card container — walk up the DOM tree to find a meaningful ancestor
+                        let card = a;
+                        for (let i = 0; i < 6; i++) {
+                            const p = card.parentElement;
+                            if (!p) break;
+                            card = p;
+                            // Stop at a container that wraps more than just this link
+                            if (card.querySelectorAll('a[href]').length >= 2) break;
+                        }
 
-                        // Title: try multiple strategies
+                        // Title: try multiple strategies in order
                         let title = '';
+
                         // 1. aria-label or title attribute on the link itself
                         title = a.getAttribute('aria-label') || a.title || '';
+
+                        // 2. Dedicated title element in card (Bilibili TV uses class names with "title")
                         if (!title) {
-                            // 2. Find the longest text node in the card (likely the title)
-                            const textNodes = Array.from(card.querySelectorAll('p, span, h1, h2, h3, h4, div'))
-                                .map(el => el.childNodes)
-                                .reduce((acc, nl) => acc.concat(Array.from(nl)), [])
-                                .filter(n => n.nodeType === 3)  // text nodes only
+                            const titleEl = card.querySelector(
+                                '[class*="title"], [class*="Title"], [class*="name"], h1, h2, h3, h4'
+                            );
+                            if (titleEl) title = titleEl.textContent.trim();
+                        }
+
+                        // 3. Text content of the link itself (often contains the video title)
+                        if (!title) {
+                            title = a.textContent.trim();
+                        }
+
+                        // 4. Longest direct text node in card elements
+                        if (!title) {
+                            const texts = Array.from(card.querySelectorAll('p, span, div'))
+                                .flatMap(el => Array.from(el.childNodes))
+                                .filter(n => n.nodeType === 3)
                                 .map(n => n.textContent.trim())
-                                .filter(t => t.length > 3 && t.length < 200);
-                            if (textNodes.length > 0) {
-                                title = textNodes.reduce((a, b) => a.length > b.length ? a : b, '');
+                                .filter(t => t.length > 5 && t.length < 200);
+                            if (texts.length > 0) {
+                                title = texts.reduce((a, b) => a.length > b.length ? a : b, '');
                             }
                         }
+
+                        // 5. Full card text (last resort)
                         if (!title) {
-                            // 3. All text in card, trimmed
-                            title = card.textContent.trim().substring(0, 100);
+                            title = card.textContent.trim().substring(0, 150);
                         }
                         title = title.substring(0, 200);
 
-                        // Channel: any link in card pointing to a user space
-                        const chanLink = card.querySelector('a[href*="/space/"], a[href*="/@"]');
+                        // Channel: try multiple URL patterns used by Bilibili TV
+                        const chanPatterns = [
+                            'a[href*="/space/"]',
+                            'a[href*="/@"]',
+                            'a[href*="/user/"]',
+                            'a[href*="/member/"]',
+                            'a[href*="/creator/"]',
+                        ];
+                        let chanLink = null;
+                        for (const pat of chanPatterns) {
+                            chanLink = card.querySelector(pat);
+                            if (chanLink) break;
+                        }
                         const chanUrl = chanLink ? chanLink.href : '';
-                        const chanIdM = chanUrl.match(/[/](?:space|user|@)[/]([^/?]+)/);
-                        // Fallback: use videoId as channel_id so each video is unique for dedup.
-                        // Real channel ID requires fetching the video page — future improvement.
+                        // Extract ID from /space/ID, /@name, /user/ID, /member/ID, /creator/ID
+                        const chanIdM = chanUrl.match(/\/(?:space|user|member|creator)\/([\w.-]+)/) ||
+                                        chanUrl.match(/\/@([\w.-]+)/);
+                        // Fallback: unique per-video ID so dedup treats each video separately
                         const chanId = chanIdM ? chanIdM[1] : ('bilibili_' + videoId);
                         const chanName = chanLink ? chanLink.textContent.trim() : '';
 
                         // View count
-                        const viewEl = card.querySelector('[class*="view"], [class*="play-count"], [class*="count"]');
+                        const viewEl = card.querySelector(
+                            '[class*="view"], [class*="play"], [class*="count"], [class*="watch"]'
+                        );
                         const views = viewEl ? viewEl.textContent.trim() : '';
 
-                        results.push({url, videoId, title, chanId, chanName, views});
+                        results.push({url, videoId, title, chanId, chanName, views,
+                                      debug_chanUrl: chanUrl, debug_cardTag: card.tagName});
                     }
                     return results;
                 }
@@ -993,6 +1030,8 @@ class BilibiliCrawler(BasePlatformCrawler):
             return []
 
         detections: list[RawDetection] = []
+        no_title = 0
+        no_chan = 0
         for item in (items or []):
             extra: dict = {}
             # Parse view count (e.g. "12.5K Putar", "1.2 rb")
@@ -1010,18 +1049,34 @@ class BilibiliCrawler(BasePlatformCrawler):
                 except Exception:
                     pass
 
+            title = item.get("title", "")
+            chan_name = item.get("chanName", "")
+            if not title:
+                no_title += 1
+            if not chan_name:
+                no_chan += 1
+
             detections.append(RawDetection(
                 platform=self.platform_name,
                 url=item["url"],
-                title=item.get("title", ""),
+                title=title,
                 channel_id=item.get("chanId", "unknown"),
-                channel_name=item.get("chanName", ""),
+                channel_name=chan_name,
                 snapshot_html="",
                 detected_at=now,
                 query_used=query,
                 extra=extra,
             ))
 
+        total = len(detections)
+        if total:
+            print(
+                f"[BilibiliCrawler] query={query!r} found={total} "
+                f"no_title={no_title} no_chan_name={no_chan} "
+                f"sample_title={detections[0].title!r} "
+                f"sample_chan={detections[0].channel_name!r}",
+                file=sys.stderr,
+            )
         return detections
 
     def _build_search_url(self, query: str) -> str:
