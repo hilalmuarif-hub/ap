@@ -112,6 +112,7 @@ class OffenderRegistry:
         self.cache_db_path = cache_db_path   # reserved for future SQLite cache
         self._backend = backend
         self._cache: dict[str, OffenderRecord] = {}   # cache_key → record
+        self._initially_loaded: bool = False  # True after first refresh_cache()
 
     # ------------------------------------------------------------------
     # Public API
@@ -190,9 +191,10 @@ class OffenderRegistry:
         if key in self._cache:
             return self._cache[key]
 
-        # Implicit full load only if the cache is completely empty.
-        # If the cache has entries but is missing this key, the offender is new.
-        if not self._cache and self._backend is not None:
+        # Implicit full load only if we haven't loaded yet.
+        # Checking `not self._cache` would re-load on every lookup when the
+        # registry is genuinely empty — causing N reads for N detections.
+        if not self._initially_loaded and self._backend is not None:
             self.refresh_cache()
             return self._cache.get(key)
 
@@ -301,6 +303,7 @@ class OffenderRegistry:
         self._cache.clear()
         for record in self._backend.load_all_records():
             self._cache[self._cache_key(record.platform, record.permanent_id)] = record
+        self._initially_loaded = True   # prevent implicit re-load on empty registry
 
     # ------------------------------------------------------------------
     # Internal helpers
