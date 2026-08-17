@@ -945,89 +945,41 @@ class BilibiliCrawler(BasePlatformCrawler):
                         // Canonical URL
                         const url = 'https://www.bilibili.tv/video/' + videoId;
 
-                        // Card container — walk up the DOM tree to find a meaningful ancestor
-                        let card = a;
-                        for (let i = 0; i < 6; i++) {
-                            const p = card.parentElement;
-                            if (!p) break;
-                            card = p;
-                            // Stop at a container that wraps more than just this link
-                            if (card.querySelectorAll('a[href]').length >= 2) break;
-                        }
+                        // Card container — use bstar-video-card class (Bilibili TV naming convention)
+                        const card = a.closest('[class*="bstar-video-card"]') || a.parentElement || a;
 
-                        // Title: try multiple strategies in order
+                        // Title: img alt attribute is the most reliable source on Bilibili TV.
+                        // The cover link wraps a <picture><img alt="Video Title"> — always present.
                         let title = '';
+                        const coverImg = a.querySelector('img');
+                        if (coverImg) title = coverImg.getAttribute('alt') || '';
 
-                        // 1. aria-label or title attribute on the link itself
-                        title = a.getAttribute('aria-label') || a.title || '';
-
-                        // 2. Dedicated title element in card (Bilibili TV uses class names with "title")
+                        // Fallback: bstar title element in info section
                         if (!title) {
                             const titleEl = card.querySelector(
-                                '[class*="title"], [class*="Title"], [class*="name"], h1, h2, h3, h4'
+                                '[class*="bstar-video-card__title"], [class*="bstar-video-card__name"]'
                             );
                             if (titleEl) title = titleEl.textContent.trim();
                         }
-
-                        // 3. Text content of the link itself (often contains the video title)
-                        if (!title) {
-                            title = a.textContent.trim();
-                        }
-
-                        // 4. Longest direct text node in card elements
-                        if (!title) {
-                            const texts = Array.from(card.querySelectorAll('p, span, div'))
-                                .flatMap(el => Array.from(el.childNodes))
-                                .filter(n => n.nodeType === 3)
-                                .map(n => n.textContent.trim())
-                                .filter(t => t.length > 5 && t.length < 200);
-                            if (texts.length > 0) {
-                                title = texts.reduce((a, b) => a.length > b.length ? a : b, '');
-                            }
-                        }
-
-                        // 5. Full card text (last resort)
-                        if (!title) {
-                            title = card.textContent.trim().substring(0, 150);
-                        }
                         title = title.substring(0, 200);
 
-                        // Channel: try multiple URL patterns used by Bilibili TV
-                        const chanPatterns = [
-                            'a[href*="/space/"]',
-                            'a[href*="/@"]',
-                            'a[href*="/user/"]',
-                            'a[href*="/member/"]',
-                            'a[href*="/creator/"]',
-                        ];
-                        let chanLink = null;
-                        for (const pat of chanPatterns) {
-                            chanLink = card.querySelector(pat);
-                            if (chanLink) break;
-                        }
+                        // Channel: bstar-video-card__up is the uploader link class on Bilibili TV
+                        const chanLink = card.querySelector(
+                            '[class*="bstar-video-card__up"], [class*="up-name"], [class*="uploader"], a[href*="/space/"]'
+                        );
                         const chanUrl = chanLink ? chanLink.href : '';
-                        // Extract ID from /space/ID, /@name, /user/ID, /member/ID, /creator/ID
-                        const chanIdM = chanUrl.match(/\/(?:space|user|member|creator)\/([\w.-]+)/) ||
+                        const chanIdM = chanUrl.match(/\/space\/([\w.-]+)/) ||
                                         chanUrl.match(/\/@([\w.-]+)/);
-                        // Fallback: unique per-video ID so dedup treats each video separately
                         const chanId = chanIdM ? chanIdM[1] : ('bilibili_' + videoId);
                         const chanName = chanLink ? chanLink.textContent.trim() : '';
 
                         // View count
                         const viewEl = card.querySelector(
-                            '[class*="view"], [class*="play"], [class*="count"], [class*="watch"]'
+                            '[class*="bstar-video-card__stat"], [class*="view"], [class*="play"], [class*="count"]'
                         );
                         const views = viewEl ? viewEl.textContent.trim() : '';
 
-                        // Debug: capture card HTML for first item only (to diagnose selector)
-                        const debugHtml = results.length === 0
-                            ? card.innerHTML.substring(0, 600).replace(/\s+/g, ' ')
-                            : '';
-
-                        results.push({url, videoId, title, chanId, chanName, views,
-                                      debug_chanUrl: chanUrl, debug_cardTag: card.tagName,
-                                      debug_cardClass: card.className.substring(0, 100),
-                                      debug_html: debugHtml});
+                        results.push({url, videoId, title, chanId, chanName, views});
                     }
                     return results;
                 }
@@ -1077,18 +1029,13 @@ class BilibiliCrawler(BasePlatformCrawler):
 
         total = len(detections)
         if total:
-            first = items[0] if items else {}
             print(
                 f"[BilibiliCrawler] query={query!r} found={total} "
                 f"no_title={no_title} no_chan_name={no_chan} "
                 f"sample_title={detections[0].title!r} "
-                f"sample_chan={detections[0].channel_name!r} "
-                f"card_tag={first.get('debug_cardTag','?')} "
-                f"card_class={first.get('debug_cardClass','?')!r}",
+                f"sample_chan={detections[0].channel_name!r}",
                 file=sys.stderr,
             )
-            if first.get("debug_html"):
-                print(f"[BilibiliCrawler] card_html_sample={first['debug_html']!r}", file=sys.stderr)
         return detections
 
     def _build_search_url(self, query: str) -> str:
