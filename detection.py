@@ -1019,8 +1019,15 @@ class BilibiliCrawler(BasePlatformCrawler):
                         );
                         const views = viewEl ? viewEl.textContent.trim() : '';
 
+                        // Debug: capture card HTML for first item only (to diagnose selector)
+                        const debugHtml = results.length === 0
+                            ? card.innerHTML.substring(0, 600).replace(/\s+/g, ' ')
+                            : '';
+
                         results.push({url, videoId, title, chanId, chanName, views,
-                                      debug_chanUrl: chanUrl, debug_cardTag: card.tagName});
+                                      debug_chanUrl: chanUrl, debug_cardTag: card.tagName,
+                                      debug_cardClass: card.className.substring(0, 100),
+                                      debug_html: debugHtml});
                     }
                     return results;
                 }
@@ -1070,13 +1077,18 @@ class BilibiliCrawler(BasePlatformCrawler):
 
         total = len(detections)
         if total:
+            first = items[0] if items else {}
             print(
                 f"[BilibiliCrawler] query={query!r} found={total} "
                 f"no_title={no_title} no_chan_name={no_chan} "
                 f"sample_title={detections[0].title!r} "
-                f"sample_chan={detections[0].channel_name!r}",
+                f"sample_chan={detections[0].channel_name!r} "
+                f"card_tag={first.get('debug_cardTag','?')} "
+                f"card_class={first.get('debug_cardClass','?')!r}",
                 file=sys.stderr,
             )
+            if first.get("debug_html"):
+                print(f"[BilibiliCrawler] card_html_sample={first['debug_html']!r}", file=sys.stderr)
         return detections
 
     def _build_search_url(self, query: str) -> str:
