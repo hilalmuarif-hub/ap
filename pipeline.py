@@ -397,7 +397,6 @@ def _init_sheets(error_log: list[str]):
         backend = GspreadBackend(
             service_account_path=sa_path,
             spreadsheet_id=sheets_id,
-            authorized_user_path=os.environ.get("GOOGLE_AUTHORIZED_USER", "authorized_user.json"),
         )
         writer = SheetWriter(config, backend=backend)
         registry = OffenderRegistry(sheet_id=sheets_id, backend=writer)
