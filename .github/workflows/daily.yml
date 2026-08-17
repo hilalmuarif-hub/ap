@@ -82,7 +82,9 @@ jobs:
       - name: Write Google service account credentials
         env:
           SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: echo "$SERVICE_ACCOUNT_JSON" > service_account.json
+        run: |
+          python -c "import os; open('service_account.json','w').write(os.environ['SERVICE_ACCOUNT_JSON'])"
+          python -c "import json; d=json.load(open('service_account.json')); print('SA type:', d.get('type')); print('SA email:', d.get('client_email'))"
 
       - name: Write Facebook cookie file
         env:
