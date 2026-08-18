@@ -351,6 +351,13 @@ class SheetWriter:
             "violation_count": str(record.violation_count) if record else "",
             "tier":            record.tier if record else "",
         }
+        # Backfill display_name and content_title when newly available
+        # (earlier runs may have written empty values; only overwrite if non-empty)
+        if evidence.identity.display_name:
+            updates["display_name"] = evidence.identity.display_name
+        if evidence.detection.title:
+            updates["content_title"] = evidence.detection.title
+
         sheet = self.config.detections_sheet_name
         for col_name, value in updates.items():
             col_idx = DETECTIONS_COLUMNS.index(col_name) + 1   # 1-based
