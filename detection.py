@@ -979,7 +979,13 @@ class BilibiliCrawler(BasePlatformCrawler):
                         );
                         const views = viewEl ? viewEl.textContent.trim() : '';
 
-                        results.push({url, videoId, title, chanId, chanName, views});
+                        // Duration: shown as overlay on thumbnail, e.g. "1:23:45" or "23:45"
+                        const durEl = card.querySelector(
+                            '[class*="duration"], [class*="bstar-video-card__duration"], [class*="bstar-play-progress"]'
+                        );
+                        const duration = durEl ? durEl.textContent.trim() : '';
+
+                        results.push({url, videoId, title, chanId, chanName, views, duration});
                     }
                     return results;
                 }
@@ -991,8 +997,20 @@ class BilibiliCrawler(BasePlatformCrawler):
         detections: list[RawDetection] = []
         no_title = 0
         no_chan = 0
+        skipped_short = 0
         for item in (items or []):
+            # Filter: skip videos shorter than 10 minutes.
+            # Full-length piracy (movies/series) is always > 10 min; short clips are noise.
+            # If duration is unknown (empty string), include the video — don't drop unknowns.
+            dur_secs = _parse_duration_secs(item.get("duration", ""))
+            if dur_secs is not None and dur_secs < 600:
+                skipped_short += 1
+                continue
+
             extra: dict = {}
+            if dur_secs is not None:
+                extra["duration_secs"] = dur_secs
+
             # Parse view count (e.g. "12.5K Putar", "1.2 rb")
             view_str = item.get("views", "")
             view_m = re.search(r'([\d,.]+)\s*(K|M|rb|jt)?', view_str)
@@ -1028,14 +1046,13 @@ class BilibiliCrawler(BasePlatformCrawler):
             ))
 
         total = len(detections)
-        if total:
-            print(
-                f"[BilibiliCrawler] query={query!r} found={total} "
-                f"no_title={no_title} no_chan_name={no_chan} "
-                f"sample_title={detections[0].title!r} "
-                f"sample_chan={detections[0].channel_name!r}",
-                file=sys.stderr,
-            )
+        raw_total = total + skipped_short
+        print(
+            f"[BilibiliCrawler] query={query!r} raw={raw_total} kept={total} "
+            f"skipped_short={skipped_short} no_title={no_title} no_chan_name={no_chan}"
+            + (f" sample_title={detections[0].title!r}" if detections else ""),
+            file=sys.stderr,
+        )
         return detections
 
     def _build_search_url(self, query: str) -> str:
@@ -1153,3 +1170,24 @@ def _build_crawlers(
 
 def _utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_duration_secs(duration_str: str) -> int | None:
+    """
+    Parse a duration string like "1:23:45" or "23:45" into total seconds.
+
+    Returns None if the string is empty or unparseable — callers treat None
+    as "unknown duration" and do not filter on it.
+    """
+    if not duration_str:
+        return None
+    parts = duration_str.strip().split(":")
+    try:
+        parts_int = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if len(parts_int) == 3:   # H:MM:SS
+        return parts_int[0] * 3600 + parts_int[1] * 60 + parts_int[2]
+    if len(parts_int) == 2:   # MM:SS
+        return parts_int[0] * 60 + parts_int[1]
+    return None
