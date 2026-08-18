@@ -963,15 +963,42 @@ class BilibiliCrawler(BasePlatformCrawler):
                         }
                         title = title.substring(0, 200);
 
-                        // Channel: bstar-video-card__up is the uploader link class on Bilibili TV
-                        const chanLink = card.querySelector(
-                            '[class*="bstar-video-card__up"], [class*="up-name"], [class*="uploader"], a[href*="/space/"]'
-                        );
+                        // Channel: try every known Bilibili TV uploader link pattern.
+                        // Also collect all <a> hrefs in card for debug when none match.
+                        const chanSelectors = [
+                            '[class*="bstar-video-card__up"]',
+                            '[class*="up-name"]',
+                            '[class*="uploader"]',
+                            '[class*="author"]',
+                            '[class*="owner"]',
+                            '[class*="creator"]',
+                            '[class*="user-name"]',
+                            '[class*="username"]',
+                            'a[href*="/space/"]',
+                            'a[href*="/@"]',
+                            'a[href*="/user/"]',
+                        ];
+                        let chanLink = null;
+                        for (const sel of chanSelectors) {
+                            chanLink = card.querySelector(sel);
+                            if (chanLink) break;
+                        }
                         const chanUrl = chanLink ? chanLink.href : '';
                         const chanIdM = chanUrl.match(/\/space\/([\w.-]+)/) ||
-                                        chanUrl.match(/\/@([\w.-]+)/);
+                                        chanUrl.match(/\/@([\w.-]+)/) ||
+                                        chanUrl.match(/\/user\/([\w.-]+)/);
                         const chanId = chanIdM ? chanIdM[1] : ('bilibili_' + videoId);
                         const chanName = chanLink ? chanLink.textContent.trim() : '';
+
+                        // Debug: for first card only, dump full outerHTML + all link hrefs
+                        let debugCardHtml = '';
+                        let debugAllLinks = '';
+                        if (results.length === 0) {
+                            debugCardHtml = card.outerHTML.substring(0, 1200).replace(/\s+/g, ' ');
+                            debugAllLinks = Array.from(card.querySelectorAll('a[href]'))
+                                .map(x => x.href + '|' + x.className + '|' + x.textContent.trim().substring(0,30))
+                                .join(' ;; ');
+                        }
 
                         // View count
                         const viewEl = card.querySelector(
@@ -985,7 +1012,8 @@ class BilibiliCrawler(BasePlatformCrawler):
                         );
                         const duration = durEl ? durEl.textContent.trim() : '';
 
-                        results.push({url, videoId, title, chanId, chanName, views, duration});
+                        results.push({url, videoId, title, chanId, chanName, views, duration,
+                                      debugCardHtml, debugAllLinks});
                     }
                     return results;
                 }
@@ -1053,6 +1081,15 @@ class BilibiliCrawler(BasePlatformCrawler):
             + (f" sample_title={detections[0].title!r}" if detections else ""),
             file=sys.stderr,
         )
+        # One-time debug per query: dump card HTML + all links to diagnose channel selector
+        if items:
+            first = items[0]
+            if first.get("debugCardHtml"):
+                print(f"[BilibiliCrawler][DEBUG] card_html={first['debugCardHtml']!r}",
+                      file=sys.stderr)
+            if first.get("debugAllLinks"):
+                print(f"[BilibiliCrawler][DEBUG] card_links={first['debugAllLinks']!r}",
+                      file=sys.stderr)
         return detections
 
     def _build_search_url(self, query: str) -> str:
