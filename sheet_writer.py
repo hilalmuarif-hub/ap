@@ -231,6 +231,29 @@ class GspreadBackend:
     def update_cell(self, sheet_name: str, row: int, col: int, value: str) -> None:
         self._retry(self._ws(sheet_name).update_cell, row, col, str(value))
 
+    def update_cells_batch(
+        self, sheet_name: str, updates: list[tuple[int, int, str]]
+    ) -> None:
+        """
+        Batch update multiple cells in ONE Sheets API call.
+
+        Args:
+            updates: list of (row, col, value) — all 1-based.
+
+        Each cell is sent as its own range entry in a single values.batchUpdate
+        request, eliminating the N-per-row API calls that blow the quota.
+        """
+        if not updates:
+            return
+        import gspread.utils as gu
+        ws = self._ws(sheet_name)
+        data = [
+            {"range": gu.rowcol_to_a1(r, c), "values": [[str(v)]]}
+            for r, c, v in updates
+        ]
+        print(f"[SA_WRITE] update_cells_batch({sheet_name!r}, {len(data)} cells)", flush=True)
+        self._retry(ws.batch_update, data, value_input_option="USER_ENTERED")
+
 
 # ---------------------------------------------------------------------------
 # SheetWriter
@@ -317,15 +340,31 @@ class SheetWriter:
         # (N additional reads), blowing past the 60 reads/min quota.
         id_to_row = self._get_cluster_id_to_row_map()
         new_rows: list[list] = []
+        cell_updates: list[tuple[int, int, str]] = []   # (row, col, value)
 
         for cluster_id, evidence, record in items:
             if cluster_id in id_to_row:
-                self._update_detection_in_place(id_to_row[cluster_id], evidence, record)
+                # Collect updates for existing row — written in one batch call below
+                cell_updates.extend(
+                    self._detection_cell_updates(id_to_row[cluster_id], evidence, record)
+                )
             else:
                 new_rows.append(
                     self._row_to_detection_values(cluster_id, evidence, record)
                 )
 
+        # Flush existing-row updates in ONE API call (avoids N×7 individual calls)
+        if cell_updates:
+            if hasattr(self._backend, "update_cells_batch"):
+                self._backend.update_cells_batch(
+                    self.config.detections_sheet_name, cell_updates
+                )
+            else:
+                sheet = self.config.detections_sheet_name
+                for row, col_idx, value in cell_updates:
+                    self._backend.update_cell(sheet, row, col_idx, value)
+
+        # Append new rows in ONE API call
         if new_rows:
             if hasattr(self._backend, "append_rows_batch"):
                 self._backend.append_rows_batch(
@@ -337,13 +376,18 @@ class SheetWriter:
 
         return len(new_rows)
 
-    def _update_detection_in_place(
+    def _detection_cell_updates(
         self,
         row: int,
         evidence: ScoredEvidence,
         record: OffenderRecord | None,
-    ) -> None:
-        """Update only the mutable pipeline columns for an existing detection row."""
+    ) -> list[tuple[int, int, str]]:
+        """
+        Return (row, col, value) tuples for mutable columns of an existing detection.
+
+        Does NOT call the backend — the caller collects these and sends them as
+        a single batch_update to avoid N×7 individual API calls blowing the quota.
+        """
         updates: dict[str, str] = {
             "score":           str(evidence.score),
             "verdict":         evidence.verdict,
@@ -352,16 +396,15 @@ class SheetWriter:
             "tier":            record.tier if record else "",
         }
         # Backfill display_name and content_title when newly available
-        # (earlier runs may have written empty values; only overwrite if non-empty)
         if evidence.identity.display_name:
             updates["display_name"] = evidence.identity.display_name
         if evidence.detection.title:
             updates["content_title"] = evidence.detection.title
 
-        sheet = self.config.detections_sheet_name
-        for col_name, value in updates.items():
-            col_idx = DETECTIONS_COLUMNS.index(col_name) + 1   # 1-based
-            self._backend.update_cell(sheet, row, col_idx, value)
+        return [
+            (row, DETECTIONS_COLUMNS.index(col_name) + 1, value)
+            for col_name, value in updates.items()
+        ]
 
     # ------------------------------------------------------------------
     # Registry sheet — implements RegistryBackend protocol
