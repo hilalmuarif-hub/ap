@@ -76,15 +76,18 @@ jobs:
       # ----------------------------------------------------------------
       # 5. Write secrets to files
       #
-      # Google auth now uses a SERVICE ACCOUNT (separate quota, no 429).
-      #   GOOGLE_SERVICE_ACCOUNT_JSON — service account key JSON
+      # Google auth uses OAuth (company account) — client JSON + refresh token.
+      #   GOOGLE_OAUTH_CLIENT_JSON    — {"installed":{...}} from Google Cloud Console
+      #   GOOGLE_AUTHORIZED_USER_JSON — saved refresh token (generated once locally)
       # ----------------------------------------------------------------
-      - name: Write Google service account credentials
+      - name: Write Google OAuth credentials
         env:
-          SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          OAUTH_CLIENT_JSON:    ${{ secrets.GOOGLE_OAUTH_CLIENT_JSON }}
+          AUTHORIZED_USER_JSON: ${{ secrets.GOOGLE_AUTHORIZED_USER_JSON }}
         run: |
-          python -c "import os; open('service_account.json','w').write(os.environ['SERVICE_ACCOUNT_JSON'])"
-          python -c "import json; d=json.load(open('service_account.json')); print('SA type:', d.get('type')); print('SA email:', d.get('client_email'))"
+          python -c "import os; open('oauth_client.json','w').write(os.environ['OAUTH_CLIENT_JSON'])"
+          python -c "import os; open('authorized_user.json','w').write(os.environ['AUTHORIZED_USER_JSON'])"
+          python -c "import json; d=json.load(open('oauth_client.json')); print('OAuth client_id:', d['installed']['client_id'][:30])"
 
       - name: Write Facebook cookie file
         env:
@@ -96,9 +99,10 @@ jobs:
       # ----------------------------------------------------------------
       - name: Run daily pipeline
         env:
-          # --- Google Sheets (service account — no quota sharing) ---
+          # --- Google Sheets (OAuth — company account) ---
           GOOGLE_SHEETS_ID:       ${{ secrets.GOOGLE_SHEETS_ID }}
-          GOOGLE_SERVICE_ACCOUNT: service_account.json
+          GOOGLE_SERVICE_ACCOUNT: oauth_client.json
+          GOOGLE_AUTHORIZED_USER: authorized_user.json
 
           # --- Facebook crawler ---
           FB_COOKIE_FILE: fb_cookies.json
@@ -145,5 +149,5 @@ jobs:
       - name: Remove credential files
         if: always()
         run: |
-          rm -f service_account.json fb_cookies.json
+          rm -f oauth_client.json authorized_user.json fb_cookies.json
           echo "Credential files removed."
