@@ -164,13 +164,29 @@ class GspreadBackend:
         if creds.get("type") == "service_account":
             gc = gspread.service_account(filename=service_account_path)
         else:
-            # OAuth installed-app flow.
-            # If authorized_user_path already has a token, no browser is opened.
+            # OAuth: load refresh token directly — no browser needed (CI-safe).
+            # gspread.oauth() opens a LocalServer flow when the token is absent,
+            # which hangs in headless CI. Using Credentials directly bypasses that.
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+
             token_path = authorized_user_path or "authorized_user.json"
-            gc = gspread.oauth(
-                credentials_filename=service_account_path,
-                authorized_user_filename=token_path,
+            with open(token_path) as tf:
+                user_info = json.load(tf)
+
+            google_creds = Credentials(
+                token=None,
+                refresh_token=user_info["refresh_token"],
+                token_uri=user_info.get("token_uri", "https://oauth2.googleapis.com/token"),
+                client_id=user_info["client_id"],
+                client_secret=user_info["client_secret"],
+                scopes=user_info.get("scopes", [
+                    "https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive",
+                ]),
             )
+            google_creds.refresh(Request())
+            gc = gspread.authorize(google_creds)
 
         self._spreadsheet = gc.open_by_key(spreadsheet_id)
 
