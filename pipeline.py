@@ -383,6 +383,7 @@ def _init_sheets(error_log: list[str]):
 
     sheets_id = os.environ.get("GOOGLE_SHEETS_ID", "")
     sa_path = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "service_account.json")
+    auth_user_path = os.environ.get("GOOGLE_AUTHORIZED_USER", "authorized_user.json")
 
     if not sheets_id:
         error_log.append("GOOGLE_SHEETS_ID not set - sheet writes skipped")
@@ -397,6 +398,7 @@ def _init_sheets(error_log: list[str]):
         backend = GspreadBackend(
             service_account_path=sa_path,
             spreadsheet_id=sheets_id,
+            authorized_user_path=auth_user_path,
         )
         writer = SheetWriter(config, backend=backend)
         registry = OffenderRegistry(sheet_id=sheets_id, backend=writer)
